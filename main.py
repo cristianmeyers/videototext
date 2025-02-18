@@ -1,10 +1,16 @@
-import whisper
+import os
+from dotenv import load_dotenv
 import ffmpeg
+import whisper
+from telegram import Update
+from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters
 
+# Cargar variables de entorno
+load_dotenv()
+TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+
+# Función para extraer audio del video
 def extraer_audio(video_path, audio_path="audio.mp3"):
-    """
-    Extrae el audio del video y lo guarda como un archivo MP3.
-    """
     try:
         ffmpeg.input(video_path).output(audio_path, format='mp3').run(overwrite_output=True)
         print(f"Audio extraído correctamente: {audio_path}")
@@ -13,13 +19,11 @@ def extraer_audio(video_path, audio_path="audio.mp3"):
         print(f"Error al extraer audio: {e}")
         return None
 
+# Función para transcribir el audio
 def transcribir_audio(audio_path):
-    """
-    Transcribe el audio usando el modelo Whisper.
-    """
     try:
-        print("Cargando modelo Whisper (base)...")
-        model = whisper.load_model("large")  # Cambiado a "large" para mayor precisión.
+        print("Cargando modelo Whisper (large)...")
+        model = whisper.load_model("large")
         print("Transcribiendo audio...")
         result = model.transcribe(audio_path)
         return result['text']
@@ -27,22 +31,48 @@ def transcribir_audio(audio_path):
         print(f"Error al transcribir: {e}")
         return None
 
-if __name__ == "__main__":
-    # Solicitar al usuario la ruta del video
-    video_path = input("Introduce la ruta del video (ejemplo: video.mp4): ")
+# Comando /start
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("¡Hola! Envíame un video y lo transcribiré por ti.")
+
+# Procesar mensajes de video
+async def procesar_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    mensaje_procesando = await update.message.reply_text("Procesando tu video, esto puede tardar un momento...")
+    video = await update.message.video.get_file()
+    video_path = "video.mp4"
+    audio_path = "audio.mp3"
     
-    # Extraer el audio del video
-    audio_path = extraer_audio(video_path)
-    
-    if audio_path:
+    try:
+        # Descargar el video
+        await video.download_to_drive(video_path)
+        # Extraer el audio
+        audio_path = extraer_audio(video_path)
+        if not audio_path:
+            raise Exception("Error al extraer audio.")
         # Transcribir el audio
         texto = transcribir_audio(audio_path)
-        if texto:
-            print("Transcripción completada:")
-            print(texto)
-            # Guardar la transcripción en un archivo de texto
-            with open("transcripcion.txt", "w", encoding="utf-8") as f:
-                f.write(texto)
-            print("La transcripción se guardó en 'transcripcion.txt'.")
-        else:
-            print("No se pudo transcribir el audio.")
+        if not texto:
+            raise Exception("Error al transcribir el audio.")
+        # Editar el mensaje con el resultado
+        await mensaje_procesando.edit_text(f"Transcripción completada:\n\n{texto}")
+    except Exception as e:
+        await mensaje_procesando.edit_text(f"Hubo un error: {e}")
+    finally:
+        # Borrar archivos temporales
+        if os.path.exists(video_path):
+            os.remove(video_path)
+        if os.path.exists(audio_path):
+            os.remove(audio_path)
+
+# Configuración del bot
+def main():
+    app = ApplicationBuilder().token(TOKEN).build()
+
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(MessageHandler(filters.VIDEO, procesar_video))
+
+    print("El bot está funcionando...")
+    app.run_polling()
+
+if __name__ == "__main__":
+    main()
